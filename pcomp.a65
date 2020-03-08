@@ -1,0 +1,90 @@
+
+;;;
+;;; 6502 Pascal compiler
+;;; A basic recursive-descent compiler for a subset of Pascal.
+;;; The compiler itself is onne-pass and compiles to p-code; a
+;;; separate program executes the p-code (and might clean up
+;;; any lingering references in the p-code).
+;;;
+;;; Written for the Mite 6502 homebrew.
+;;;
+;;; Paul Dourish, March 2020 (altouhgh based on something
+;;; that I intiially wrote in 1985).
+;;;
+
+* = $0300
+
+;;;
+;;; Presume that we enter this code from the FORTH runtime on the Mite.
+;;; That means that (1) the upper half of the zero page is reserved
+;;; for the stack, (2) X is reserved and already in operation as the
+;;; stack pointer, (3) whatever I need for SD card access is available,
+;;; annd (4) ACIA annd VIA are already up and running
+;;;
+
+;;; CONSTANTS
+TK_PROGRAM
+TK_BEGIN
+TK_END
+TK_SEMIC
+TK_WRITE
+TK_WRITELN
+TK_IF
+TK_THEN
+TK_ELSE
+TK_WHILE
+TK_FOR
+TK_ASSIGN
+TK_COLON
+TK_INTEGER
+TK_PROCEDURE
+TK_FUNCTION
+TK_NUMBER
+TK_IDENTIFIER
+TK_BOOLAND
+TK_BOOLOR
+TK_BOOLNOT
+TK_BITAND
+TK_BITOR
+TK_BITNOT
+TK_EQUAL
+TK_GREATER
+TK_LESS
+TK_GREATEREQ
+TK_LESSEQ
+TK_NOTEQUAL
+TK_OPENPAREN
+TK_CLOSEPAREN
+TK_CONST
+TK_VAR
+
+;;; ZP locations
+
+;;; other variables
+
+
+
+
+
+gettoken
+
+
+getword
+
+
+;;;
+;;; Input handling. I need to be able to distinguish lookig at the
+;;; current character and consuming it/moving to the next.
+;;;
+
+thischar
+  ;; return character at current pointer
+  lda (TEXTPTR)
+  rts
+  
+consumechar
+  ;; move pointer to next character, potentially refilling the
+  ;; buffer
+  
+
+

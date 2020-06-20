@@ -2,30 +2,453 @@
 ;;; Pascal P-code Interpreter for PS65
 ;;;
 
+* = $0300
+  jmp start
 
 
+;;; Declarations. These first few are imported from monitor/FORTH.
+PRINTVEC=$0042      ; address for printing strings
+INPUT=$7F00         ; input buffer
+SCRATCH=$0010       ; workpad
+CURSEC=$0068        ; current disk sector
+WORD=$7EC0          ; string for filename lookups
 
-;;; Main loop
+
+;;;
+;;; MEMORY MAP
+;;;
+;;; 0000-02FF  reserved data areas for other programs
+;;; 0300-12FF  interpreter and runtime code (revise when finished)
+;;; 1300-32FF  8K for p-code
+;;; 3300-6FFF  15K-ish for run-time data
+;;; 7000-7FFF  reserved for I/O
+;;;
+
+;PCODEBASE=$1300     ; starting point for p-code
+MEMBASE=$3300       ; starting point for run-time data
+MEMEND=$6FFF        ; end point
+IOBASE=$7000        ; starting point for I/O space / end of mem
+
+;;;
+;;; P-MACHINE REGISTERS
+;;;
+;;; PPC is the program counter
+;;; PIP is the instruction pointer
+;;; PSP is the stack pointer
+;;; PBA is the base address (stack frame pointer)
+;;;
+
+PPC=0060
+PIP=0062
+PSP=0064
+PBA=0066
+
+CLUSTER .word 0
+CACHEX  .byte 0
+
+#include "../mitemon/decl.a65"
+#include "../mitemon/stack.a65"
+;#include "../mitemon/apps/jmptable.a65"
+
+start
+  ;; cache operand pointer
+  stx CACHEX
+  
+;;; parse command line argument
+
+  ;; DEBUG
+  ;; for debugging purposes, skip the command line processes and
+  ;; we will take our p-codes directly from the compiled-in data.
+  ;; override MEMBASE
+PCODEBASE=testp1
+  jmp init
+  ;; END DEBUG
+
+#if 0
+;; extract the filename from the command line, and copy it into
+  ;; WORD as a counted string
+  ;;
+  ldy #0
+  ;; skip to first space (ie skip past the command)
+skip1
+  lda INPUT,y
+  beq nameerror
+  cmp #32
+  beq skip2
+  iny
+  beq nameerror
+  bra skip1
+  ;; now skip to first following non-space (ie start of filename)
+skip2
+  lda INPUT,y
+  beq nameerror
+  cmp #32
+  bne copychars
+  iny
+  beq nameerror
+  bra skip2
+copychars
+  phx
+  ldx #1
+.(
+nextchar
+  lda INPUT,y
+  sta WORD,x
+  beq donecopy
+  cmp #32
+  beq donecopy
+  inx
+  iny
+  bne nextchar
+.)
+donecopy
+  stx WORD          ; store the character count
+  plx
+  bra findfile
+
+nameerror
+  ;; there's been some problem finding the name, so
+  ;; report an error and quit.
+  lda #<nameerrstr
+  sta PRINTVEC
+  lda #>nameerrstr
+  sta PRINTVEC+1
+  jsr ROMPRTSTR
+  rts
+
+findfile
+  ;; look up the filename in the dictionary.
+  clc
+  jsr ROMFINDDIRW
+  bcc loadfile
+
+fileerror
+  ;; there's been some problem finding the file, so
+  ;; report an error and quit.
+  lda #<nofileerrstr
+  sta PRINTVEC
+  lda #>nofileerrstr
+  sta PRINTVEC+1
+  jsr ROMPRTSTR
+  rts
+
+loadfile
+  ;; at this point, the file is set up. the directory sector is in
+  ;; the LBLOCK/HBLOCK area, and the stack has the double-precision
+  ;; sector number and a pointer to the directory entry within it
+  ;; so the cluster number is at ptr + 26,27
+  ;; CHECK HAS THE DIRECTORY SECTOR BEEN SAVED YET???
+
+  ;; get cluster #, cache it
+  lda stackbase+1,x
+  sta SCRATCH
+  lda stackbase+2,x
+  sta SCRATCH+1
+  ldy #26
+  lda (SCRATCH),y
+  sta CLUSTER
+  iny
+  lda (SCRATCH),y
+  sta CLUSTER+1
+#endif
+
+
+;;; load p-code
+
+
+init
+  ;; initial values for registers
+  ;; stack grows downward, so start at end
+  lda #<MEMEND
+  sta PSP
+  sta PBA           ; is this right?
+  lda #>MEMEND
+  sta PSP+1
+  sta PBA+1         ; is this right?
+
+  lda #<PCODEBASE
+  sta PPC
+  lda #>PCODEBASE
+  sta PPC+1
+  
+;;;
+;;; interpreter maain loop. fetch an instruction, update the registers,
+;;; find the code to execute, and execute it
+;;;
 
 step
-  lda PPC           ; update instruction pointer
+  lda PPC           ; update instruction pointer from 
   sta PIP
   lda PPC+1
   sta PIP+1
 
   lda (PIP)         ; fetch next instruction
   asl               ; shift to make index to dispatch table
-  tay               ; cache it in Y
+  tax               ; cache it in X
 
 .(
   clc               ; move PC forward to next instruction
-  lda PI
+  lda PPC
   adc #4            ; each instruction is four bytes long
-  sta PI
+  sta PPC
   bcc skip
-  inc PI+1
+  inc PPC+1
 skip
 .)
 
-  jmp (DISPATCH),Y
+  jmp (DISPATCH,X)
+
+postinstruction
+  ;; print the registers
+  jsr printregstate
+  ;; await user input?
+  lda #".
+  jsr ROMPUTA
+  jsr ROMPUTA
+  jsr ROMPUTA
+
+  jsr ROMGET
+  jsr ROMPUTA
+  cmp #'q
+  bne step
+
+quit
+  ldx CACHEX
+  rts
+
+
+;;; OPCODES AND DISPATCH TABLE
+;;; Each two-byte table entry is the address for the code to handle a
+;;; p-code opcode.
+;;;
+
+O_LIT=0
+O_OPT=1
+O_LOD=2
+O_LODX=3
+O_STO=4
+O_STOX=5
+O_CAL=6
+O_INT=7
+O_JMP=8
+O_JPC=9
+O_CSP=10
+O_STP=11
+
+DISPATCH
+.word dolit
+.word doopr
+.word dolod
+.word dolodx
+.word dosto
+.word dostox
+.word docal
+.word doint
+.word dojmp
+.word dojpc
+.word docsp
+.word dostp
+
+
+
+;; read a literal value as an LSB,MSB pair and leaves it on the stack
+;; in same order (although stack grows down).
+dolit
+  sec
+  lda PSP
+  sbc #2
+  sta PSP
+  lda PSP+1
+  sbc #0
+  sta PSP+1
+
+  ldy #3
+  lda (PIP),y       ; MSB of operand
+  dey
+  sta (PSP),y       ; put it on the stack
+  lda (PIP),y       ; LSB of operand
+  dey
+  sta (PSP),y       ; put it on the stack
+
+  jmp postinstruction
   
+  
+doopr
+
+
+dolod
+  ldy #1
+  lda (PIP),y
+  cmp #255
+  beq lodabs
+  ;; relative load here
+
+lodabs
+  ;; take the value on the stack as an address, and replace it with the
+  ;; the value at that address. 
+  ldy #2
+  lda (PSP),y
+  sta SCRATCH+1
+  dey
+  lda (PSP),y
+  sta SCRATCH
+
+  ldy #1
+  lda (SCRATCH)     ; LSB
+  sta (PSP),y
+  lda (SCRATCH),y   ; MSB
+  iny
+  sta (PSP),y
+
+  jmp postinstruction
+
+
+dolodx
+
+
+dosto
+
+
+dostox
+
+
+docal
+
+
+doint
+
+
+dojmp
+
+
+dojpc
+
+
+docsp
+
+dostp
+  jmp quit
+
+
+printregstate
+  lda #"P
+  jsr ROMPUTA
+  lda #"=
+  jsr ROMPUTA
+  lda PPC+1
+  jsr putax
+  lda PPC
+  jsr putax
+  lda #32
+  jsr ROMPUTA
+
+  lda #"I
+  jsr ROMPUTA
+  lda #"=
+  jsr ROMPUTA
+  lda PIP+1
+  jsr putax
+  lda PIP
+  jsr putax
+  lda #32
+  jsr ROMPUTA
+
+  lda #"S
+  jsr ROMPUTA
+  lda #"=
+  jsr ROMPUTA
+  lda PSP+1
+  jsr putax
+  lda PSP
+  jsr putax
+  lda #32
+  jsr ROMPUTA
+
+  lda #"B
+  jsr ROMPUTA
+  lda #"=
+  jsr ROMPUTA
+  lda PBA+1
+  jsr putax
+  lda PBA
+  jsr putax
+
+  jsr crlf
+  rts
+
+crlf
+  lda #10
+  jsr ROMPUTA
+  lda #13
+  jsr ROMPUTA
+  rts
+
+putax
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
+  rts
+hextable:   .byte "0123456789ABCDEF"
+
+
+-ROMPUTA
+.(
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
+  rts
+
+
+-ROMGET
+.(
+wait_rxd_full    
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+.)
+  lda ACIA_DATA
+  rts
+
+
+
+nameerrstr:   .byte "no filename specified", $00
+nofileerrstr: .byte "no such file", $00
+
+
+
+
+;;; test programs
+testp1  .byte O_LIT, 0, $12, $34, O_LIT, 0, $56, $78, O_STP

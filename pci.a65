@@ -1,0 +1,31 @@
+;;;
+;;; Pascal P-code Interpreter for PS65
+;;;
+
+
+
+
+;;; Main loop
+
+step
+  lda PPC           ; update instruction pointer
+  sta PIP
+  lda PPC+1
+  sta PIP+1
+
+  lda (PIP)         ; fetch next instruction
+  asl               ; shift to make index to dispatch table
+  tay               ; cache it in Y
+
+.(
+  clc               ; move PC forward to next instruction
+  lda PI
+  adc #4            ; each instruction is four bytes long
+  sta PI
+  bcc skip
+  inc PI+1
+skip
+.)
+
+  jmp (DISPATCH),Y
+  

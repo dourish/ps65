@@ -1,6 +1,13 @@
 ;;;
 ;;; Pascal P-code Interpreter for PS65
 ;;;
+;;; This implementation is based on the "Tiny Pascal" p-machine
+;;; described in articles in the September and October 1978 issues
+;;; of Byte magazine... which was also the basis of a compiler I
+;;; wrote for myself for the BBC Micro in 1985.
+;;;
+;;; Paul Dourish, June 2020
+;;;
 
 * = $0300
   jmp start
@@ -63,7 +70,7 @@ start
   ;; for debugging purposes, skip the command line processes and
   ;; we will take our p-codes directly from the compiled-in data.
   ;; override MEMBASE
-PCODEBASE=testp1
+PCODEBASE=testp2
   jmp init
   ;; END DEBUG
 
@@ -222,6 +229,8 @@ postinstruction
 
   jsr ROMGET
   jsr ROMPUTA
+
+  jsr crlf
   cmp #'q
   bne step
 
@@ -236,7 +245,7 @@ quit
 ;;;
 
 O_LIT=0
-O_OPT=1
+O_OPR=1
 O_LOD=2
 O_LODX=3
 O_STO=4
@@ -263,6 +272,29 @@ DISPATCH
 .word dostp
 
 
+OPDISPATCH
+.word opreturn
+.word opnegate
+.word opadd
+.word opsubtract
+.word opmultiply
+.word opdivide
+.word oplsb
+.word opmodulo
+.word opequal
+.word opnotequal
+.word oplesser
+.word opgreaterequal
+.word opgreater
+.word oplesserequal
+.word opor
+.word opand
+.word opnot
+.word oplsl
+.word oplsr
+.word opinc
+.word opdec
+.word opcopy
 
 ;; read a literal value as an LSB,MSB pair and leaves it on the stack
 ;; in same order.
@@ -287,6 +319,11 @@ dolit
   
   
 doopr
+  ldy #2
+  lda (PIP),y       ; load the operation number
+  asl               ; multiply by two for offset into table
+  tax
+  jmp (OPDISPATCH,X)
 
 
 dolod
@@ -371,14 +408,39 @@ docal
 doint
 
 
+;;; JMP is unconditional jump instruction
 dojmp
+  ldy #2            ; load the 16-bit parameter and move
+  lda (PIP),y       ; it to PPC
+  sta (PPC)
+  iny
+  lda (PIP),y
+  ldy #1
+  sta (PPC),y
+  jmp postinstruction
 
 
+;;; JPC is conditional jump instruction
 dojpc
+.(
+  sec               ; first, decrement SP by one word
+  lda PSP
+  sbc #2
+  sta PSP
+  bcs skip
+  dec PSP+1
+skip
+.)
+  ldy #1
+  lda (PSP)
+  and #01           ; only testing lowest bit
+  eor (PIP),y       ; eor value and flag
+  beq dojmp         ; do jump if match
+  jmp postinstruction
 
 
 docsp
-  ldy #3
+  ldy #2
   lda (PIP),y
   cmp #5
   bne unknown
@@ -390,6 +452,64 @@ unknown
 dostp
   jmp quit
 
+
+
+opreturn
+opnegate
+
+opadd
+.(
+  sec
+  lda PSP
+  sbc #4
+  sta PSP
+  bcs skip
+  dec PSP+1
+skip
+.)
+
+  ldy #2
+  clc
+  lda (PSP)          ; add SP and SP+2
+  adc (PSP),y
+  sta (PSP)
+  iny
+  lda (PSP),y        ; ad SP+3 and SP+1
+  ldy #1
+  adc (PSP),y
+  sta (PSP),y
+
+.(
+  clc
+  lda PSP
+  adc #2
+  sta PSP
+  bne skip
+  inc PSP+1
+skip
+.)
+  jmp postinstruction
+
+
+opsubtract
+opmultiply
+opdivide
+oplsb
+opmodulo
+opequal
+opnotequal
+oplesser
+opgreaterequal
+opgreater
+oplesserequal
+opor
+opand
+opnot
+oplsl
+oplsr
+opinc
+opdec
+opcopy
 
 error
   lda #"?
@@ -535,5 +655,7 @@ nofileerrstr: .byte "no such file", $00
 
 
 ;;; test programs
-testp1  .byte O_LIT, 0, $12, $34, O_LIT, 0, $56, $78, O_CSP, 0, 0, 5,
-        .byte O_CSP, 0, 0, 5, O_STP
+testp1  .byte O_LIT, 0, $12, $34, O_LIT, 0, $56, $78, O_CSP, 0, 5, 0,
+        .byte O_CSP, 0, 5, 0, O_STP, 0, 0, 0
+testp2  .byte O_LIT, 0, 3, 0, O_LIT, 0, 4, 0, O_OPR, 0, 2, 0,
+        .byte O_CSP, 0, 5, 0, O_STP, 0, 0, 0

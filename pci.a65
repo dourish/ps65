@@ -38,10 +38,13 @@ IOBASE=$7000        ; starting point for I/O space / end of mem
 ;;; PBA is the base address (stack frame pointer)
 ;;;
 
-PPC=0060
-PIP=0062
-PSP=0064
-PBA=0066
+PPC=$0060
+PIP=$0062
+PSP=$0064
+PBA=$0066
+
+;;; Working variables
+EBASE=$0068
 
 CLUSTER .word 0
 CACHEX  .byte 0
@@ -159,10 +162,10 @@ loadfile
 init
   ;; initial values for registers
   ;; stack grows downward, so start at end
-  lda #<MEMEND
+  lda #<MEMBASE
   sta PSP
   sta PBA           ; is this right?
-  lda #>MEMEND
+  lda #>MEMBASE
   sta PSP+1
   sta PBA+1         ; is this right?
 
@@ -170,6 +173,16 @@ init
   sta PPC
   lda #>PCODEBASE
   sta PPC+1
+
+  ;; initialize base stack frame
+  lda #<MEMBASE
+  sta MEMBASE
+  sta MEMBASE+2
+  sta MEMBASE+4
+  lda #>MEMBASE
+  sta MEMBASE+1
+  sta MEMBASE+3
+  sta MEMBASE+5
   
 ;;;
 ;;; interpreter maain loop. fetch an instruction, update the registers,
@@ -252,23 +265,23 @@ DISPATCH
 
 
 ;; read a literal value as an LSB,MSB pair and leaves it on the stack
-;; in same order (although stack grows down).
+;; in same order.
 dolit
-  sec
+  ldy #2
+  lda (PIP),y
+  sta (PSP)
+  iny
+  lda (PIP),y
+  ldy #1
+  sta (PSP),y
+
+  clc
   lda PSP
-  sbc #2
+  adc #2
   sta PSP
   lda PSP+1
-  sbc #0
+  adc #0
   sta PSP+1
-
-  ldy #3
-  lda (PIP),y       ; MSB of operand
-  dey
-  sta (PSP),y       ; put it on the stack
-  lda (PIP),y       ; LSB of operand
-  dey
-  sta (PSP),y       ; put it on the stack
 
   jmp postinstruction
   
@@ -279,9 +292,49 @@ doopr
 dolod
   ldy #1
   lda (PIP),y
-  cmp #255
+  beq lodlocal      ; offset of 0 means it's current stack frame
+  cmp #255          ; offset of 255 signals an absolute load
   beq lodabs
+
   ;; relative load here
+  ;; calcluate EBASE
+  ;; jump to finishlod
+
+lodlocal
+  lda PBA           ; set EBASE to this stack frame
+  sta EBASE
+  lda PBA+1
+  sta EBASE+1
+
+finishlod
+  iny
+  lda (PIP),y       ; fetch offset of load address
+  clc
+  adc #3            ; add three (base, static, dynamic links)
+  asl               ; multiply by two (bytes to words)
+  tay
+  lda (EBASE),y     ; load LSB
+  pha               ; cache on hardware stack
+  iny
+  lda (EBASE),y     ; load MSB
+  pha               ; cache on hardware stack
+
+  sec               ; make space on the stack
+  lda PSP
+  sbc #2
+  sta PSP
+  lda PSP+1
+  sbc #0
+  sta PSP+1
+
+  ldy #2
+  pla               ; pull MSB
+  sta (PSP),y       ; place on stack
+  dey
+  pla               ; pull LSB
+  sta (PSP),y       ; place on stack
+
+  jmp postinstruction
 
 lodabs
   ;; take the value on the stack as an address, and replace it with the
@@ -325,11 +378,26 @@ dojpc
 
 
 docsp
+  ldy #3
+  lda (PIP),y
+  cmp #5
+  bne unknown
+  jsr PRT_PUTHEX
+  jmp postinstruction
+unknown  
+  jmp error
 
 dostp
   jmp quit
 
 
+error
+  lda #"?
+  jsr ROMPUTA
+  jsr ROMPUTA
+  jsr ROMPUTA
+  jmp quit
+  
 printregstate
   lda #"P
   jsr ROMPUTA
@@ -443,6 +511,22 @@ wait_rxd_full
   rts
 
 
+PRT_PUTHEX
+  sec
+  lda PSP
+  sbc #2
+  sta PSP
+  lda PSP+1
+  sbc #0
+  sta PSP+1
+
+  ldy #1
+  lda (PSP),y
+  jsr putax
+  lda (PSP)
+  jsr putax
+  rts
+
 
 nameerrstr:   .byte "no filename specified", $00
 nofileerrstr: .byte "no such file", $00
@@ -451,4 +535,5 @@ nofileerrstr: .byte "no such file", $00
 
 
 ;;; test programs
-testp1  .byte O_LIT, 0, $12, $34, O_LIT, 0, $56, $78, O_STP
+testp1  .byte O_LIT, 0, $12, $34, O_LIT, 0, $56, $78, O_CSP, 0, 0, 5,
+        .byte O_CSP, 0, 0, 5, O_STP

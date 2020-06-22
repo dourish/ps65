@@ -39,6 +39,10 @@ IOBASE=$7000        ; starting point for I/O space / end of mem
 ;;;
 ;;; P-MACHINE REGISTERS
 ;;;
+;;; The p-machine is stack-oriented. It has just four registers,
+;;; all pointers, and all implemented as 16-bit values stored
+;;; on the zero page.
+;;;
 ;;; PPC is the program counter
 ;;; PIP is the instruction pointer
 ;;; PSP is the stack pointer
@@ -50,9 +54,11 @@ PIP=$0062
 PSP=$0064
 PBA=$0066
 
-;;; Working variables
-EBASE=$0068
+;;;
+;;; OTEHR WORKING VARIABLES
+;;;
 
+EBASE=$0068
 CLUSTER .word 0
 CACHEX  .byte 0
 
@@ -64,13 +70,16 @@ start
   ;; cache operand pointer
   stx CACHEX
   
-;;; parse command line argument
+  ;;;
+  ;;; STARTUP ROUTINES. Basically, parse and process command
+  ;;; line arguments and load the p-code file.
+  ;;;
 
   ;; DEBUG
   ;; for debugging purposes, skip the command line processes and
   ;; we will take our p-codes directly from the compiled-in data.
   ;; override MEMBASE
-PCODEBASE=testp2
+PCODEBASE=testp3
   jmp init
   ;; END DEBUG
 
@@ -166,6 +175,11 @@ loadfile
 ;;; load p-code
 
 
+;;;
+;;; INITIALIZATION. Set up the initial values for the p-machine
+;;; registers and anything else that is needed before
+;;; execution begins.
+;;;
 init
   ;; initial values for registers
   ;; stack grows downward, so start at end
@@ -192,12 +206,14 @@ init
   sta MEMBASE+5
   
 ;;;
-;;; interpreter maain loop. fetch an instruction, update the registers,
-;;; find the code to execute, and execute it
+;;; INTERPRETER MAIN LOOP. This is pretty trivially short.
+;;; Fetch instructions, update the program counter, and
+;;; execute the instruction by using the opcode as an index
+;;; into a dispatch table.
 ;;;
 
 step
-  lda PPC           ; update instruction pointer from 
+  lda PPC           ; update instruction pointer from program counter
   sta PIP
   lda PPC+1
   sta PIP+1
@@ -239,9 +255,13 @@ quit
   rts
 
 
-;;; OPCODES AND DISPATCH TABLE
-;;; Each two-byte table entry is the address for the code to handle a
-;;; p-code opcode.
+;;;
+;;; OPCODES AND DISPATCH TABLE(S).
+;;;
+;;; There are three dispatch tables -- one for p-codes,
+;;; one for operations (mainly arithmetic), and one for stored
+;;; runtime procedures. Each is a list of two-byte pointers
+;;; to executable code.
 ;;;
 
 O_LIT=0
@@ -296,8 +316,27 @@ OPDISPATCH
 .word opdec
 .word opcopy
 
-;; read a literal value as an LSB,MSB pair and leaves it on the stack
-;; in same order.
+CSPDISPATCH
+.word cspinch
+.word cspoutch
+.word cspinint
+.word cspoutint
+.word cspinhex
+.word cspouthex
+.word cspoutstr
+.word cslcrln
+
+
+;;;
+;;; P-CODE IMPLEMENTATIONS. Each p-code has a corresponding
+;;; procedure. Some (OPR, CSP) require further dispatching based
+;;; on a parameter.
+;;;
+;;; Each procedure ends by jumping to "postinstruction"
+;;;
+
+;;; Implements LIT. Places a literal value on the stack
+;;;
 dolit
   ldy #2
   lda (PIP),y
@@ -318,6 +357,9 @@ dolit
   jmp postinstruction
   
   
+;;; Implements OPR. Dispatch arithmetic operations based on
+;;; parameter.
+;;;
 doopr
   ldy #2
   lda (PIP),y       ; load the operation number
@@ -326,6 +368,9 @@ doopr
   jmp (OPDISPATCH,X)
 
 
+;;; Implements LOD. Load from memory, potentially tracking
+;;; through static pointers to find the right variable.
+;;;
 dolod
   ldy #1
   lda (PIP),y
@@ -405,10 +450,26 @@ dostox
 docal
 
 
+;;; Implement IMP. Increments stack pointer by an amount
+;;; specified in a parameter.
+;;;
+;;; This could be byte-oriented or word-oriented. For the moment,
+;;; let's presume that it's byte oriented.
 doint
+  ldy #2
+  clc
+  lda PSP
+  adc (PIP),y
+  sta PSP
+  iny
+  lda PSP+1
+  adc (PIP),y
+  sta PSP+1
+  jmp postinstruction
 
 
-;;; JMP is unconditional jump instruction
+;;; Implements JMP. Unconditional jump.
+;;;
 dojmp
   ldy #2            ; load the 16-bit parameter and move
   lda (PIP),y       ; it to PPC
@@ -420,7 +481,8 @@ dojmp
   jmp postinstruction
 
 
-;;; JPC is conditional jump instruction
+;;; Implements JPC. Conditional jump. Whether it jumps on true
+;;; or false is specified by a parameter.
 dojpc
 .(
   sec               ; first, decrement SP by one word
@@ -439,13 +501,17 @@ skip
   jmp postinstruction
 
 
+;;; Implements CSP. Calls a stored procedure (runtime routine).
+;;; Implements its own dispatch table for these.
+;;; BUG BUG BUG no error checking to validate parameter!
+;;;
 docsp
   ldy #2
   lda (PIP),y
-  cmp #5
-  bne unknown
-  jsr PRT_PUTHEX
-  jmp postinstruction
+  asl
+  tax
+  jmp (CSPDISPATCH,x)
+
 unknown  
   jmp error
 
@@ -453,6 +519,10 @@ dostp
   jmp quit
 
 
+;;;
+;;; ARITHMETIC OPERATION IMPLEMENTATIONS. These are dispatched
+;;; using OPDISPATCH table for OPR p-code.
+;;;
 
 opreturn
 opnegate
@@ -496,7 +566,53 @@ opmultiply
 opdivide
 oplsb
 opmodulo
+
 opequal
+.(
+  sec
+  lda PSP
+  sbc #4
+  sta PSP
+  bcs skip
+  dec PSP+1
+skip
+.)
+
+.(
+  ldy #2
+  clc
+  lda (PSP)         ; compare LSB
+  cmp (PSP),y
+  bne dofalse
+  iny
+  lda (PSP),y       ; compare MSB
+  ldy #1
+  cmp (PSP),y
+  bne dofalse
+dotrue
+  lda #0
+  sta (PSP),y
+  lda #1            ; 1 for true
+  sta (PSP)
+  bra done
+dofalse
+  lda #0
+  sta (PSP),y       ; 0 for false
+  sta (PSP)
+done
+.)
+
+.(
+  clc
+  lda PSP
+  adc #2
+  sta PSP
+  bne skip
+  inc PSP+1
+skip
+.)
+  jmp postinstruction
+
 opnotequal
 oplesser
 opgreaterequal
@@ -507,9 +623,142 @@ opand
 opnot
 oplsl
 oplsr
+
+;;; increment the value at the top of the stack
+;;;
 opinc
+  sec
+  lda PSP
+  sbc #2
+  sta SCRATCH
+  lda PSP+1
+  adc #0
+  sta SCRATCH+1
+
+.(
+  lda (SCRATCH)
+  adc #1
+  sta (SCRATCH)
+  bcc skip
+  ldy #1
+  lda (SCRATCH),y
+  adc #0
+  sta (SCRATCH),y
+skip
+.)
+  jmp postinstruction
+  
+
+;;; decrement the value on the top of the stack
+;;;
 opdec
+  sec
+  lda PSP
+  sbc #2
+  sta SCRATCH
+  lda PSP+1
+  adc #0
+  sta SCRATCH+1
+
+.(
+  sec
+  lda (SCRATCH)
+  sbc #1
+  sta (SCRATCH)
+  bcs skip
+  ldy #1
+  lda (SCRATCH),y
+  sbc #0
+  sta (SCRATCH),y
+skip
+.)
+  jmp postinstruction
+
+;;; make a copy of the value on the top of the stack
+;;;
 opcopy
+.(
+  sec
+  lda PSP
+  sbc #2
+  sta PSP
+  bcs skip
+  dec PSP+1
+skip
+.)
+
+  ldy #2
+  lda (PSP)
+  sta (PSP),y
+  dey
+  lda (PSP),y
+  ldy #3
+  sta (PSP),y
+
+.(
+  clc
+  lda PSP
+  adc #4
+  sta PSP
+  bcc skip
+  inc PSP+1
+skip
+.)
+  jmp postinstruction
+
+
+
+;;;
+;;; CSP routines
+;;;
+;;; CSP is the "call stored procedure" opcode, so this is
+;;; basically the runtime library for the p-machine.
+
+cspinch
+cspoutch
+  sec
+  lda PSP
+  sbc #2
+  sta PSP
+  lda PSP+1
+  sbc #0
+  sta PSP+1
+
+  ldy #1
+  lda (PSP),y
+  jsr ROMPUTA
+  jmp postinstruction
+
+cspinint
+cspoutint
+cspinhex
+
+cspouthex
+  sec
+  lda PSP
+  sbc #2
+  sta PSP
+  lda PSP+1
+  sbc #0
+  sta PSP+1
+
+  ldy #1
+  lda (PSP),y
+  jsr putax
+  lda (PSP)
+  jsr putax
+
+  jmp postinstruction
+
+cspoutstr
+cslcrln
+  jsr crlf
+  jmp postinstruction
+
+
+;;;
+;;; MISCELLANEOUS SUPPORT ROUTINES
+;;;
 
 error
   lda #"?
@@ -631,22 +880,6 @@ wait_rxd_full
   rts
 
 
-PRT_PUTHEX
-  sec
-  lda PSP
-  sbc #2
-  sta PSP
-  lda PSP+1
-  sbc #0
-  sta PSP+1
-
-  ldy #1
-  lda (PSP),y
-  jsr putax
-  lda (PSP)
-  jsr putax
-  rts
-
 
 nameerrstr:   .byte "no filename specified", $00
 nofileerrstr: .byte "no such file", $00
@@ -655,7 +888,22 @@ nofileerrstr: .byte "no such file", $00
 
 
 ;;; test programs
+;;; this one tests stack access
 testp1  .byte O_LIT, 0, $12, $34, O_LIT, 0, $56, $78, O_CSP, 0, 5, 0,
         .byte O_CSP, 0, 5, 0, O_STP, 0, 0, 0
+;;; this one tests basic addition
 testp2  .byte O_LIT, 0, 3, 0, O_LIT, 0, 4, 0, O_OPR, 0, 2, 0,
         .byte O_CSP, 0, 5, 0, O_STP, 0, 0, 0
+;;; this one is "if 3+4 = 7 then write('1') else write (0) fi"
+testp3  .byte O_LIT, 0, 3, 0, O_LIT, 0, 4, 0, O_OPR, 0, 2, 0,
+        .byte O_JPC, 0, <(testp3+288), >(testp3+28),
+        .byte O_LIT, 0, 1, 0, O_CSP, 0, 5, 0,
+	.byte O_JMP, 0, <testp3fi, >testp3fi,
+testp3el
+	.byte O_LIT, 0, 0, 0, O_CSP, 0, 5, 0,
+testp3fi
+	.byte O_STP
+
+;;; future tests
+;;; procedure call and variable loading
+

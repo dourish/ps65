@@ -373,14 +373,14 @@ doopr
 ;;;
 dolod
   ldy #1
-  lda (PIP),y
+  lda (PIP),y       ; load level
   beq lodlocal      ; offset of 0 means it's current stack frame
   cmp #255          ; offset of 255 signals an absolute load
   beq lodabs
 
   ;; relative load here
-  ;; calcluate EBASE
-  ;; jump to finishlod
+  jsr findbase      ; calculate EBASE for level
+  bra finishlod
 
 lodlocal
   lda PBA           ; set EBASE to this stack frame
@@ -448,6 +448,45 @@ dostox
 
 
 docal
+  ;; handle 255
+  ;; special case to handle 0?
+
+  ;; find BASE
+
+  ;; push base for desired level (static link)
+  ldy #1
+  lda SCRATCH
+  sta (PSP)
+  lda SCRATCH+1
+  sta (PSP),y
+  iny
+
+  ;; push current base (dynamic link)
+  lda PBA
+  sta (PSP),y
+  iny
+  lda PBA+1
+  sta (PSP),y
+  iny
+
+  ;; push current pc (return address)
+  lda PPC
+  sta (PSP),y
+  iny
+  lda PPC+1
+  sta (PSP),y
+
+  ;; reset base
+
+  ;; reset pc
+  ldy #2
+  lda (PIP),y
+  sta PPC
+  iny
+  lda (PIP),y
+  sta PPC+1
+
+  jmp postinstruction
 
 
 ;;; Implement IMP. Increments stack pointer by an amount
@@ -713,6 +752,7 @@ skip
 ;;;
 ;;; CSP is the "call stored procedure" opcode, so this is
 ;;; basically the runtime library for the p-machine.
+;;;
 
 cspinch
 cspoutch
@@ -724,8 +764,7 @@ cspoutch
   sbc #0
   sta PSP+1
 
-  ldy #1
-  lda (PSP),y
+  lda (PSP)
   jsr ROMPUTA
   jmp postinstruction
 
@@ -760,6 +799,35 @@ cslcrln
 ;;; MISCELLANEOUS SUPPORT ROUTINES
 ;;;
 
+;;; follow chain of static links to populate EBASE with the effective
+;;; base. on entry, accumulator holds number of levels to search
+findbase
+.(
+  sta SCRATCH
+
+  lda BASE
+  sta EBASE
+  lda BASE+1
+  sta EBASE+1
+
+  ldy #1
+  lda SCRATCH
+  beq done
+
+loop
+  lda (EBASE)
+  pha
+  lda (EBASE),y
+  sta EBASE+1
+  pla
+  sta EBASE
+  dec SCRATCH
+  bne loop
+
+done
+  rts
+.)
+
 error
   lda #"?
   jsr ROMPUTA
@@ -767,6 +835,9 @@ error
   jsr ROMPUTA
   jmp quit
   
+
+;;; print registers for debugging purposes
+;;;
 printregstate
   lda #"P
   jsr ROMPUTA

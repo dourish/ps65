@@ -1,4 +1,3 @@
-
 ;;;
 ;;; 6502 Pascal compiler
 ;;; A basic recursive-descent compiler for a subset of Pascal.
@@ -12,7 +11,13 @@
 ;;; that I intiially wrote in 1985).
 ;;;
 
+
+TXTPTR=$80
+WORD=$7EC0
+
 * = $0300
+  jmp start
+
 
 ;;;
 ;;; Presume that we enter this code from the FORTH runtime on the Mite.
@@ -23,40 +28,40 @@
 ;;;
 
 ;;; CONSTANTS
-TK_PROGRAM
-TK_BEGIN
-TK_END
-TK_SEMIC
-TK_WRITE
-TK_WRITELN
-TK_IF
-TK_THEN
-TK_ELSE
-TK_WHILE
-TK_FOR
-TK_ASSIGN
-TK_COLON
-TK_INTEGER
-TK_PROCEDURE
-TK_FUNCTION
-TK_NUMBER
-TK_IDENTIFIER
-TK_BOOLAND
-TK_BOOLOR
-TK_BOOLNOT
-TK_BITAND
-TK_BITOR
-TK_BITNOT
-TK_EQUAL
-TK_GREATER
-TK_LESS
-TK_GREATEREQ
-TK_LESSEQ
-TK_NOTEQUAL
-TK_OPENPAREN
-TK_CLOSEPAREN
-TK_CONST
-TK_VAR
+TK_PROGRAM=1
+TK_BEGIN=2
+TK_END=3
+TK_SEMIC=4
+TK_WRITE=5
+TK_WRITELN=6
+TK_IF=7
+TK_THEN=8
+TK_ELSE=9
+TK_WHILE=10
+TK_FOR=11
+TK_ASSIGN=12
+TK_COLON=13
+TK_INTEGER=14
+TK_PROCEDURE=15
+TK_FUNCTION=16
+TK_NUMBER=17
+TK_IDENTIFIER=18
+TK_BOOLAND=19
+TK_BOOLOR=20
+TK_BOOLNOT=21
+TK_BITAND=22
+TK_BITOR=23
+TK_BITNOT=24
+TK_EQUAL=25
+TK_GREATER=26
+TK_LESS=27
+TK_GREATEREQ=28
+TK_LESSEQ=29
+TK_NOTEQUAL=30
+TK_OPENPAREN=31
+TK_CLOSEPAREN=32
+TK_CONST=33
+TK_VAR=34
 
 ;;; ZP locations
 
@@ -65,21 +70,222 @@ TK_VAR
 
 
 
+start
+  lda #<testbuf
+  sta TXTPTR
+  lda #>testbuf
+  sta TXTPTR+1
+nextword
+  jsr skipspace
+  jsr getword
+  bra nextword
+  
+
+
+
 
 gettoken
 
 
-getword
 
+skipspace
+.(
+  ldy #0
+nextchar
+  lda (TXTPTR),y
+  cmp #32
+  beq space
+  cmp #8
+  beq space
+  cmp #10
+  beq space
+  cmp #13
+  beq space
+  tya
+  beq skip
+  clc
+  adc TXTPTR
+  sta TXTPTR
+  bcc skip
+  inc TXTPTR+1
+skip
+  rts
+space
+  iny
+  bra nextchar
+.)
+  
+
+
+getword
+  lda (TXTPTR)
+  ;; is it a number?
+  cmp #"0
+  bcc notnumber
+  cmp #":
+  bcs notnumber
+  jmp readnumber
+  
+notnumber
+;; is it an alpha?
+  cmp #"A
+  bcc notalpha
+  cmp #"[
+  bcc isalpha
+  cmp #"a
+  bcc notalpha
+  cmp #"{
+  bcs notalpha
+isalpha
+  jmp readalphanum
+
+notalpha
+  ;; it's a symbol
+  sta WORD
+  ;; special case for symbols which might be more than one character
+  ldy #1
+.(
+  cmp #".
+  bne next
+  lda (TXTPTR),y
+  cmp #".
+  bne finish
+  sta WORD,y
+  iny
+  bra finish
+next
+.)
+.(
+  cmp #"<
+  lda (TXTPTR),y
+  bne next
+  cmp #">
+  bne finish
+  sta WORD,y
+  iny
+  bra finish
+next
+.)
+  cmp #":
+  lda (TXTPTR),y
+  cmp #"=
+  bne finish
+  sta WORD,y
+  iny
+finish
+  lda #0
+  sta WORD,y
+.(
+clc
+  tya
+  beq skip
+  adc TXTPTR
+  sta TXTPTR
+  bcc skip
+  inc TXTPTR+1
+skip
+.)
+rts
+  
+
+readalphanum
+.(
+  ldy #0
+readnext
+  ;; keep on going until we get to a space or a punctuation mark
+  ;; other than underscore
+  lda (TXTPTR),y
+checkupper
+  cmp #"A
+  bcc checknum
+  cmp #"[
+  bcc okay
+checkunderscore
+  cmp #"_
+  beq okay
+  cmp #"a
+  bcc checknum
+  cmp #"{
+  bcc okay
+  bra nope
+
+checknum
+  cmp #"0
+  bcc nope
+  cmp #":
+  bcs nope
+okay
+  sta WORD,y
+  iny
+  bra readnext
+
+nope
+  lda #0
+  sta WORD,y
+  tya               ; update TXTPTR to point to first non alphanum char
+  beq skip
+  clc
+  adc TXTPTR
+  sta TXTPTR
+  bcc skip
+  inc TXTPTR+1
+skip
+.)
+  rts
+
+readnumber
+.(
+  ldy #0
+nextchar
+  lda (TXTPTR),y
+  cmp #"0
+  bcc nope
+  cmp #":
+  bcs nope
+  sta WORD,y
+  iny
+  bra nextchar
+nope
+  lda #0
+  sta WORD,y
+  clc
+  tya
+  beq skip
+  adc TXTPTR
+  sta TXTPTR
+  bcc skip
+  inc TXTPTR+1
+skip
+.)
+  rts
 
 ;;;
 ;;; Input handling. I need to be able to distinguish lookig at the
 ;;; current character and consuming it/moving to the next.
 ;;;
 
+nextchar
+.(
+;; return next character in buffer, incrementing buffer
+  ;; pointer. return NUL if we run off the end of the buffer.
+  ;; later, when we do this for real, we'll potentially refill
+  ;; the buffer
+  lda (TXTPTR)
+  pha
+  inc TXTPTR
+  bne skip
+  inc TXTPTR+1
+skip
+  pla
+  rts
+.)
+
+
+
+
 thischar
   ;; return character at current pointer
-  lda (TEXTPTR)
+  lda (TXTPTR)
   rts
   
 consumechar
@@ -88,3 +294,22 @@ consumechar
   
 
 
+
+
+testbuf
+.byte "   "
+.byte "program tprog;"
+.byte "var"
+.byte "   a :  integer;"
+.byte "procedure test;"
+.byte "var b : integer;"
+.byte "begin"
+.byte "   a := 10;"
+.byte "   b := 4+3;"
+.byte "   writeln(b);"
+.byte "   writeln(a);"
+.byte "end;"
+.byte "begin"
+.byte "   test"
+.byte "end."
+.byte 0

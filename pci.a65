@@ -805,9 +805,9 @@ findbase
 .(
   sta SCRATCH
 
-  lda BASE
+  lda PBA
   sta EBASE
-  lda BASE+1
+  lda PBA+1
   sta EBASE+1
 
   ldy #1

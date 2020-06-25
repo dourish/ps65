@@ -14,9 +14,12 @@
 
 TXTPTR=$80
 WORD=$7EC0
+SCRATCH=$0010       ; workpad
 
 * = $0300
   jmp start
+
+#include "../mitemon/decl.a65"
 
 
 ;;;
@@ -63,6 +66,49 @@ TK_CLOSEPAREN=32
 TK_CONST=33
 TK_VAR=34
 
+
+;;;
+;;; Token table. Each entry is a link field, a token string length,
+;;; the token string, and then the token value.
+;;;
+;;; BUG don't really need the pointer if we know that each entry is
+;;; nchars plus two.
+;;;
+tokentable
+.byte 7, "program", TK_PROGRAM
+.byte 5, "begin", TK_BEGIN
+.byte 3, "end", TK_END
+.byte 1, ";", TK_SEMIC
+.byte 5, "write", TK_WRITE
+.byte 7, "writeln", TK_WRITELN
+.byte 2, "if", TK_IF
+.byte 4, "then", TK_THEN
+.byte 4, "else", TK_ELSE
+.byte 5, "while", TK_WHILE
+.byte 3, "for", TK_FOR
+.byte 2, ":=", TK_ASSIGN
+.byte 1, ":", TK_COLON
+.byte 7, "integer", TK_INTEGER
+.byte 9, "procedure", TK_PROCEDURE
+.byte 8, "function", TK_FUNCTION
+.byte 3, "and", TK_BOOLAND
+.byte 2, "or", TK_BOOLOR
+.byte 3, "not", TK_BOOLNOT
+.byte 1, "&", TK_BITAND
+.byte 1, "|", TK_BITOR
+.byte 1, "!", TK_BITNOT
+.byte 1, "=", TK_EQUAL
+.byte 1, ">", TK_GREATER
+.byte 1, "<", TK_LESS
+.byte 2, "<=", TK_GREATEREQ
+.byte 2, ">=", TK_LESSEQ
+.byte 2, "<>", TK_NOTEQUAL
+.byte 1, "(", TK_OPENPAREN
+.byte 1, ")", TK_CLOSEPAREN
+.byte 5, "const", TK_CONST
+.byte 3, "var", TK_VAR
+.byte 0
+
 ;;; ZP locations
 
 ;;; other variables
@@ -78,6 +124,9 @@ start
 nextword
   jsr skipspace
   jsr getword
+  jsr findtoken
+  jsr putax
+  jsr crlf
   bra nextword
   
 
@@ -156,11 +205,27 @@ notalpha
 next
 .)
 .(
+  lda (TXTPTR)
   cmp #"<
-  lda (TXTPTR),y
   bne next
+  lda (TXTPTR),y
   cmp #">
-  bne finish
+  beq second
+  cmp #"=
+  bne next
+second
+  sta WORD,y
+  iny
+  bra finish
+next
+.)
+.(
+  lda (TXTPTR)
+  cmp #">"
+  bne next
+  lda (TXTPTR),y
+  cmp #"=
+  bne next
   sta WORD,y
   iny
   bra finish
@@ -288,10 +353,112 @@ thischar
   lda (TXTPTR)
   rts
   
-consumechar
-  ;; move pointer to next character, potentially refilling the
-  ;; buffer
+
+findtoken
+  lda #<tokentable  ; SCRATCH/+1 is the pointer to current entry
+  sta SCRATCH
+  lda #>tokentable
+  sta SCRATCH+1
+
+testtoken
+  lda (SCRATCH)     ; load character count for this entry
+  beq endoftable    ; zero indicates end of table
+
+  sta SCRATCH+4     ; cache the character count
+
+  inc               ; next entry is at base + char count + 2
+  inc               ; calculate pointer and store in S+2/3
+  clc
+  adc SCRATCH       ; cache pointer to next entry
+  sta SCRATCH+2
+  lda SCRATCH+1
+  adc #0
+  sta SCRATCH+3
   
+.(
+  inc SCRATCH       ; move pointer past character count
+  bne skip
+  inc SCRATCH+1
+skip
+.)
+
+  ldy #0
+testchar
+  lda WORD,y
+  cmp (SCRATCH),y
+  bne matchfail
+  iny               ; this char good, so move onto next one
+  cpy SCRATCH+4     ; check if we have reached limit
+  bne testchar
+gotmatch
+  lda (SCRATCH),y   ; found match, return the token value
+  rts
+
+matchfail
+  lda SCRATCH+2     ; match failed so move onto next entry
+  sta SCRATCH
+  lda SCRATCH+3
+  sta SCRATCH+1
+  bra testtoken
+
+endoftable
+  lda #0
+  rts
+  
+
+crlf
+  lda #10
+  jsr ROMPUTA
+  lda #13
+  jsr ROMPUTA
+  rts
+
+putax
+.(
+  phy
+
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  pha             ; put a copy back
+  clc
+  and #$f0
+  ror
+  ror
+  ror
+  ror
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+wait_txd_empty2
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty2
+  pla
+  clc
+  and #$0f
+  tay
+  lda hextable,y
+  sta ACIA_DATA
+.)
+  ply
+  rts
+hextable:   .byte "0123456789ABCDEF"
+
+ROMPUTA
+.(
+  pha
+wait_txd_empty
+  lda ACIA_STATUS
+  and #$10
+  beq wait_txd_empty
+  pla
+  sta ACIA_DATA
+.)
+  rts
 
 
 
@@ -310,6 +477,6 @@ testbuf
 .byte "   writeln(a);"
 .byte "end;"
 .byte "begin"
-.byte "   test"
+.byte "   test "
 .byte "end."
 .byte 0

@@ -134,6 +134,56 @@ start
   stz STLAST        ; add a null entry
   jsr addtableframe ; make initial frame
   
+  ;; test harness -- use key input to try different routines
+testloop
+  jsr ROMGET
+.(
+  cmp #"a
+  bne next
+  jsr addtableframe
+  bra testloop
+next
+.)
+.(
+  cmp #"d
+  bne next
+  jsr droptableframe
+  bra testloop
+next
+.)
+.(
+  cmp #"c
+  bne next
+  jsr comptest
+  bra testloop
+next
+.)
+.(
+  cmp #"l
+  bne next
+  jsr listframe
+  bra testloop
+next
+.)
+.(
+  cmp #"q
+  bne next
+  rts
+next
+.)
+.(
+  cmp #"v
+  bne next
+  jsr addtestvar
+  bra testloop
+next
+.)
+  lda #"?
+  jsr ROMPUTA
+  jsr crlf
+  bra testloop
+
+comptest
   lda #<testbuf
   sta TXTPTR
   lda #>testbuf
@@ -530,6 +580,7 @@ droptableframe
   lda (STSTACK),y
   sta SCRATCH+1
 
+.(
   sec               ; drop top item from stack
   lda STSTACK
   sbc #2
@@ -537,6 +588,7 @@ droptableframe
   bcs skip
   dec STSTACK+1
 skip
+.)
 
 
   ;; set STLAST to be one byte before the old stack frame
@@ -551,6 +603,124 @@ skip
 
   rts
 
+
+addtestvar
+  lda #":
+  jsr ROMPUTA
+  ldy #0
+  
+inputloop
+  jsr ROMGET
+  cmp #13
+  beq doneinput
+  jsr ROMPUTA
+  sta WORD,y
+  iny
+  bra inputloop
+
+doneinput
+  jsr crlf
+  jsr addsymbol
+  
+  rts
+
+listframe
+  ;; get ptr to start of frame
+  ldy #1
+  lda (STSTACK)
+  sta SCRATCH
+  lda (STSTACK),y
+  sta SCRATCH+1
+
+listnext
+  lda (SCRATCH)
+  beq endofframe    ; 0 signals end of frame
+
+  sta SCRATCH+2     ; store the symbol length
+.(
+clc               ; skip ahead to name
+  lda SCRATCH
+  adc #4
+  sta SCRATCH
+  bcc skip
+  inc SCRATCH+1
+skip
+.)
+ldy #0
+printloop
+  lda (SCRATCH),y   ; fetch and print character of name
+  jsr ROMPUTA
+  iny
+  cpy SCRATCH+2     ; stop when we reach the char count
+  bne printloop
+
+.(
+tya
+  clc               ; advance to next entry
+  adc SCRATCH
+  sta SCRATCH
+  bcc skip
+  inc SCRATCH+1
+skip
+.)
+  
+  jsr crlf
+  bra listnext
+
+endofframe
+  rts
+  
+  
+  
+
+
+
+
+
+;;; add a symbol to the symbol table. on entry, the symbol is in
+;;; WORD and Y holds the length in characters. the entry is added
+;;; to the currently active table frame, and then a new NUL entry
+;;; is added at the end.
+addsymbol
+  tya
+  sta (STLAST)
+
+  ;; where do we get the type? where do we get the location?
+  ;; for now, leave those out
+
+.(
+  clc
+  lda STLAST
+  adc #4
+  sta STLAST
+  bcc skip
+  inc STLAST+1
+skip
+.)
+
+  sty SCRATCH
+  ldy #0
+copyloop
+  lda WORD,y
+  sta (STLAST),y
+  iny
+  cpy SCRATCH
+  bne copyloop
+
+.(
+  clc
+  tya
+  adc STLAST
+  sta STLAST
+  bcc skip
+  inc STLAST+1
+skip
+.)
+
+  lda #0
+  sta (STLAST)
+
+  rts
 
 ;;;
 ;;; SUPPORT ROUTINES
@@ -610,6 +780,15 @@ wait_txd_empty
 .)
   rts
 
+ROMGET
+.(
+wait_rxd_full    
+  lda ACIA_STATUS
+  and #$08
+  beq wait_rxd_full
+.)
+  lda ACIA_DATA
+  rts
 
 
 

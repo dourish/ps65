@@ -14,7 +14,10 @@
 
 TXTPTR=$80
 WORD=$7EC0
+STSTACKSPACE=$6000
 SCRATCH=$0010       ; workpad
+STLAST=0060  ; and 0061
+STSTACK=0062 ; and 0063
 
 * = $0300
   jmp start
@@ -65,6 +68,7 @@ TK_OPENPAREN=31
 TK_CLOSEPAREN=32
 TK_CONST=33
 TK_VAR=34
+TK_PERIOD=35
 
 
 ;;;
@@ -105,6 +109,7 @@ tokentable
 .byte 2, "<>", TK_NOTEQUAL
 .byte 1, "(", TK_OPENPAREN
 .byte 1, ")", TK_CLOSEPAREN
+.byte 1, ".", TK_PERIOD
 .byte 5, "const", TK_CONST
 .byte 3, "var", TK_VAR
 .byte 0
@@ -117,6 +122,18 @@ tokentable
 
 
 start
+  ;; initialize symbol table
+  stz STSTACK       ; STSTACK won't get deep, so place it at bottom
+  lda #1            ; of the hardware stack page
+  sta STSTACK+1
+  lda #<STSTACKSPACE
+  sta STLAST
+  lda #>STSTACKSPACE
+  sta STLAST+1
+  lda #0
+  stz STLAST        ; add a null entry
+  jsr addtableframe ; make initial frame
+  
   lda #<testbuf
   sta TXTPTR
   lda #>testbuf
@@ -124,18 +141,25 @@ start
 nextword
   jsr skipspace
   jsr getword
+  lda WORD
+  beq end
   jsr findtoken
   jsr putax
   jsr crlf
   bra nextword
-  
+
+end
+  rts
 
 
 
 
-gettoken
-
-
+;;;
+;;; SCANNER/TOKENIZER.
+;;;
+;;; Read words from the input and deliver them  as token values
+;;; from the token table.
+;;;
 
 skipspace
 .(
@@ -167,7 +191,12 @@ space
 
 
 getword
+.(
   lda (TXTPTR)
+  bne continue
+  jmp endofdata
+
+continue  
   ;; is it a number?
   cmp #"0
   bcc notnumber
@@ -193,7 +222,6 @@ notalpha
   sta WORD
   ;; special case for symbols which might be more than one character
   ldy #1
-.(
   cmp #".
   bne next
   lda (TXTPTR),y
@@ -251,7 +279,10 @@ clc
 skip
 .)
 rts
-  
+
+endofdata
+  stz WORD
+  rts
 
 readalphanum
 .(
@@ -355,6 +386,13 @@ thischar
   
 
 findtoken
+  lda WORD
+  bne searchtable
+  lda #0            ; return NUL token if no input data
+  rts
+
+searchtable
+
   lda #<tokentable  ; SCRATCH/+1 is the pointer to current entry
   sta SCRATCH
   lda #>tokentable
@@ -402,9 +440,121 @@ matchfail
   bra testtoken
 
 endoftable
-  lda #0
+.(
+  ;; no token found in the table, so presume it's an identified
+  ;; if it starts with an alphabetical character, or a number
+  ;; otherwise
+  ldy #0
+  lda WORD,y
+  cmp #"A
+  bcc notalpha
+  cmp #"[
+  bcc isalpha
+  cmp #"a
+  bcc notalpha
+  cmp #"{
+  bcs notalpha
+isalpha
+  lda #TK_IDENTIFIER
   rts
+notalpha
+  lda #TK_NUMBER
+  rts
+.)
   
+
+
+;;;
+;;; SYMBOL TABLE
+;;;
+;;; The symbol table is essentially a stack of tables, in order to
+;;; manage scope appropriately. each subtable is a "table frame".
+;;; each table frame ends with a null entry, which is the point
+;;; where new entries are added. essentially, it is one table, but
+;;; we have a separate stack of pointers into the table signalling
+;;; each frame. to search the table, grab the pointer to the most
+;;; recent frame, and begin our search there; then if that fails,
+;;; grab the pointer to the next most recent frame, etc.
+;;;
+
+;;; one byte for symbol length
+;;; one byte for symbol type (variable, procedure, function)
+;;; two bytes for symbol location (address for proc/fun)
+;;; n bytes for symbol name
+
+;;; looking up a symbol generates a pair -- level offset and address
+;;; level offset is based on how many table frames we had to look through
+
+;;; add a symbol. write it at the end (over the null entry) and then
+;;; add a new null entry.
+
+;;; add a table frame -- so update the frame stack and set a null
+;;; entry for the new table
+addtableframe
+  ;; increment pointer to new entry. we know that that need only
+  ;; be one byte ahead of the last null entry.
+.(
+  inc STLAST
+  bne skip
+  inc STLAST+1
+skip
+.)
+
+  lda #0            ; add new null table entry 
+  sta (STLAST)
+
+.(
+  clc               ; open new stack entry
+  lda STSTACK
+  adc #2
+  sta STSTACK
+  bcc skip
+  inc STSTACK+1
+skip
+.)
+  ldy #1            ; add new frame entry to stack
+  lda STLAST
+  sta (STSTACK)
+  lda STLAST+1
+  sta (STSTACK),y
+
+  rts
+
+;;; remove a table frame
+;;; in the new top frame, scan forward to find the null entry
+droptableframe
+  ;; cache the address of the stack frame we're dropping
+  ldy #1
+  lda (STSTACK)
+  sta SCRATCH
+  lda (STSTACK),y
+  sta SCRATCH+1
+
+  sec               ; drop top item from stack
+  lda STSTACK
+  sbc #2
+  sta STSTACK
+  bcs skip
+  dec STSTACK+1
+skip
+
+
+  ;; set STLAST to be one byte before the old stack frame
+  ;; which should be prior null entry
+  sec
+  lda SCRATCH
+  sbc #1  
+  sta STLAST
+  lda SCRATCH+1
+  sbc #0
+  sta STLAST+1
+
+  rts
+
+
+;;;
+;;; SUPPORT ROUTINES
+;;;
 
 crlf
   lda #10

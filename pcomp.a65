@@ -178,6 +178,13 @@ next
   bra testloop
 next
 .)
+.(
+  cmp #"s
+  bne next
+  jsr findtestvar
+  bra testloop
+next
+.)
   lda #"?
   jsr ROMPUTA
   jsr crlf
@@ -605,6 +612,7 @@ skip
 
 
 addtestvar
+.(
   lda #":
   jsr ROMPUTA
   ldy #0
@@ -623,8 +631,48 @@ doneinput
   jsr addsymbol
   
   rts
+.)
+
+
+findtestvar
+.(
+  lda #"?
+  jsr ROMPUTA
+  ldy #0
+  
+inputloop
+  jsr ROMGET
+  cmp #13
+  beq doneinput
+  jsr ROMPUTA
+  sta WORD,y
+  iny
+  bra inputloop
+
+doneinput
+  jsr crlf
+  jsr findsymbol
+  bcc nope
+  lda SCRATCH+1
+  jsr putax
+  lda SCRATCH
+  jsr putax
+  jsr crlf
+  rts
+
+nope
+  lda #"x
+  jsr ROMPUTA
+  jsr ROMPUTA
+  jsr ROMPUTA
+  jsr ROMPUTA
+  jsr crlf
+  rts
+.)
+
 
 listframe
+.(
   ;; get ptr to start of frame
   ldy #1
   lda (STSTACK)
@@ -669,12 +717,8 @@ skip
 
 endofframe
   rts
+.)
   
-  
-  
-
-
-
 
 
 ;;; add a symbol to the symbol table. on entry, the symbol is in
@@ -720,6 +764,119 @@ skip
   lda #0
   sta (STLAST)
 
+  rts
+
+
+;;; look up a symbol in the symbol table. on entry, the symbol is in WORD
+;;; and Y contains the character count. On exit, A is 0 if it is not
+;;; found, or 1 if it is found. SCRATCH/S+1 contain a pointer to the
+;;; symbol table entry, S+2 is the level count, and S+3 is the offset.
+findsymbol
+.(
+  sty SCRATCH+4     ; cache the character count
+  stz SCRATCH+5     ; temp level count
+
+  ;; start with most local frame
+  ldy #1
+  lda (STSTACK)
+  sta SCRATCH+2
+  lda (STSTACK),y
+  sta SCRATCH+3
+
+nextframe
+  ;; search here
+  jsr searchframe
+
+  ;; found?
+  bcs foundsymbol
+
+  ;; not found, move to next frame
+  inc SCRATCH+5     ; bump up level count
+  sec
+  lda SCRATCH+2
+  sbc #2
+  sta SCRATCH+2
+  bcc nomatch       ; if carry clear, we've moved page, so exit
+  bra nextframe     ; otherwise, search next frame
+
+nomatch
+  clc
+  rts
+
+foundsymbol
+  sec
+  rts
+.)
+
+
+;;; search for symbol in WORD just in the a single symbol table frame.
+;;; on entry, SCRATCH+4 is the character count. SCRATCH+2/3 is the start
+;;; of the frame. on exit, set carry to signal success and leave pointer
+;;; in SCRATCH/S+1.
+searchframe
+  lda SCRATCH+2
+  sta SCRATCH
+  lda SCRATCH+3
+  sta SCRATCH+1
+.(
+testnext
+  ;; begin by calculating the address of the NEXT entry
+.(
+clc
+  lda (SCRATCH)
+  beq endofframe    ; short-circuit if we hit end of frame
+  adc SCRATCH
+  sta SCRATCH+6
+  lda SCRATCH+1
+  adc #0
+  sta SCRATCH+7
+
+  lda SCRATCH+6
+  adc #4
+  sta SCRATCH+6
+  bcc skip
+  inc SCRATCH+7
+skip
+.)  
+
+  lda (SCRATCH)
+  cmp SCRATCH+4
+  bne skipmatch
+
+.(
+clc               ; skip ahead to name
+  lda SCRATCH
+  adc #4
+  sta SCRATCH
+  bcc skip
+  inc SCRATCH+1
+skip
+.)
+
+  ldy #0
+matchloop
+  lda (SCRATCH),y   ; test character by character
+  cmp WORD,y
+  bne skipmatch
+  iny
+  cpy SCRATCH+4     ; stop when we reach the char count
+  bne matchloop
+  bra foundmatch
+
+skipmatch
+  lda SCRATCH+6
+  sta SCRATCH
+  lda SCRATCH+7
+  sta SCRATCH+1
+  bra testnext
+
+endofframe
+  clc
+  rts
+.)
+
+foundmatch
+  sec
   rts
 
 ;;;

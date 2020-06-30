@@ -128,11 +128,14 @@ start
   sta STSTACK+1
   lda #<STSTACKSPACE
   sta STLAST
+  sta (STSTACK)
   lda #>STSTACKSPACE
   sta STLAST+1
+  ldy #1
+  sta (STSTACK),y
   lda #0
   stz STLAST        ; add a null entry
-  jsr addtableframe ; make initial frame
+;  jsr addtableframe ; make initial frame
   
   ;; test harness -- use key input to try different routines
 testloop
@@ -776,14 +779,20 @@ findsymbol
   sty SCRATCH+4     ; cache the character count
   stz SCRATCH+5     ; temp level count
 
+  ;; make a pointer into the frame stack
   ;; start with most local frame
-  ldy #1
-  lda (STSTACK)
-  sta SCRATCH+2
-  lda (STSTACK),y
-  sta SCRATCH+3
+  lda STSTACK
+  sta SCRATCH+8
+  lda STSTACK+1
+  sta SCRATCH+9
 
 nextframe
+  ldy #1
+  lda (SCRATCH+8)
+  sta SCRATCH+2
+  lda (SCRATCH+8),y
+  sta SCRATCH+3
+
   ;; search here
   jsr searchframe
 
@@ -793,9 +802,9 @@ nextframe
   ;; not found, move to next frame
   inc SCRATCH+5     ; bump up level count
   sec
-  lda SCRATCH+2
+  lda SCRATCH+8
   sbc #2
-  sta SCRATCH+2
+  sta SCRATCH+8
   bcc nomatch       ; if carry clear, we've moved page, so exit
   bra nextframe     ; otherwise, search next frame
 
